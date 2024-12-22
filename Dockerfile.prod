@@ -2,8 +2,13 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY docker/requirements.txt .
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first to leverage Docker cache
+COPY docker/requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
@@ -13,5 +18,10 @@ COPY agent.py .
 
 # Set production environment
 ENV FLASK_ENV=production
+ENV PYTHONUNBUFFERED=1
+
+# Verify installations
+RUN python -c "from openai import OpenAI" && \
+    echo "OpenAI package successfully installed"
 
 CMD ["python", "app.py"] 
