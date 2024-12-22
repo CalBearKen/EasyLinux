@@ -296,6 +296,43 @@ class AIAgent:
             if 'cursor' in locals():
                 cursor.close()
 
+    def execute_loop_query(self, loop_command: str) -> Tuple[str, bool]:
+        """Execute a loop operation over database tables."""
+        try:
+            if not self.connect_to_db():
+                return "Failed to connect to database", False
+
+            # First get all tables
+            cursor = self.db_connection.cursor(dictionary=True)
+            cursor.execute("SHOW TABLES")
+            tables = [list(row.values())[0] for row in cursor.fetchall()]
+            
+            if not tables:
+                return "No tables found in database", False
+
+            # Initialize result string
+            result = []
+            
+            # Execute the command for each table
+            for table in tables:
+                result.append(f"\n=== Table: {table} ===")
+                cursor.execute(f"SELECT * FROM {table}")
+                rows = cursor.fetchall()
+                
+                if not rows:
+                    result.append("(empty table)")
+                else:
+                    df = pd.DataFrame(rows)
+                    result.append(df.to_string())
+
+            return "\n".join(result), True
+
+        except Error as e:
+            return f"Database error: {str(e)}", False
+        finally:
+            if 'cursor' in locals():
+                cursor.close()
+
     def execute_command(self, command_str: str) -> Tuple[str, bool]:
         """Execute a command safely and return its output."""
         try:
@@ -345,26 +382,37 @@ class AIAgent:
         """Get a response from the AI agent."""
         self.add_to_history("user", user_input)
         
-        system_prompt = """You are an AI assistant that helps users with Linux commands and database queries using natural language.
-        When users ask questions in natural language, ALWAYS translate them to proper SQL commands.
+        system_prompt = """You are an AI assistant that helps users with both Linux commands and database operations.
+        When users ask questions in natural language, translate them to appropriate commands:
         
-        For SELECT queries:
-        - Use proper SQL SELECT syntax
-        - For "what data" questions, use "SELECT * FROM table_name"
-        - Always end SQL statements with a semicolon
+        1. For Linux commands:
+        - File operations (ls, cat, grep, etc.)
+        Example: "what files are there" → "ls -la"
         
-        Example responses:
-        User: "what data is in the users table"
-        Response: Retrieving all data from users table
-        EXECUTE: SELECT * FROM users;
+        2. For database operations:
+        - When asked about tables, use "SHOW TABLES;"
+        - When asked about data, use "SELECT * FROM table_name;"
+        Example: "what tables are in the database" → "SHOW TABLES;"
+        Example: "what's in the users table" → "SELECT * FROM users;"
         
-        User: "show me the test table"
-        Response: Retrieving all records from test table
-        EXECUTE: SELECT * FROM test;
+        3. For database loops:
+        - When user wants to perform operation on all tables, use LOOP: prefix
+        Example: "show data from all tables" → "LOOP: SHOW_DATA"
+        Example: "for each table show all data" → "LOOP: SHOW_DATA"
+        Example: "display contents of every table" → "LOOP: SHOW_DATA"
         
-        IMPORTANT: Always respond with proper SQL syntax.
-        Keep explanations brief and ensure EXECUTE: is the last line."""
+        4. For database connections:
+        Example: "connect to database testdb" → CONNECT: {"host": "mysql", "user": "root", "password": "rootpassword", "database": "testdb"}
         
+        IMPORTANT: 
+        - For Linux commands, use EXECUTE: prefix
+        - For SQL queries, ALWAYS use EXECUTE: prefix and end with semicolon
+        - For table loops, use LOOP: prefix
+        - For connections, use CONNECT: prefix with JSON
+        
+        Never respond with just "run" or general statements.
+        Always translate user questions into actual commands."""
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -378,16 +426,40 @@ class AIAgent:
             
             ai_response = response.choices[0].message.content
             
-            # Extract command if present
-            if "EXECUTE:" in ai_response:
+            # Handle loop operations
+            if "LOOP:" in ai_response:
+                parts = ai_response.split("LOOP:")
+                explanation = parts[0].strip()
+                loop_command = parts[1].strip()
+                
+                result, success = self.execute_loop_query(loop_command)
+                response_text = f"Loop operation: {loop_command}\nOutput: {result}"
+                self.add_to_history("assistant", response_text)
+                return response_text
+            
+            # Handle database connection requests
+            if "CONNECT:" in ai_response:
+                parts = ai_response.split("CONNECT:")
+                explanation = parts[0].strip()
+                connection_str = parts[1].strip()
+                
+                try:
+                    import json
+                    connection_details = json.loads(connection_str)
+                    result = self.connect_to_new_database(connection_details)
+                    response_text = f"Connection request: {connection_str}\nResult: {result}"
+                    self.add_to_history("assistant", response_text)
+                    return response_text
+                except json.JSONDecodeError:
+                    return "Error: Invalid connection details format"
+            
+            # Handle regular commands
+            elif "EXECUTE:" in ai_response:
                 parts = ai_response.split("EXECUTE:")
                 explanation = parts[0].strip()
                 command = parts[1].strip()
                 
-                print(f"Executing command: {command}")  # Debug print
                 result, success = self.execute_command(command)
-                
-                # Format response without repeating the explanation
                 response_text = f"Command: {command}\nOutput: {result}"
                 self.add_to_history("assistant", response_text)
                 return response_text
@@ -396,5 +468,30 @@ class AIAgent:
             return ai_response
             
         except Exception as e:
-            print(f"Error in get_response: {str(e)}")  # Debug print
+            print(f"Error in get_response: {str(e)}")
             return f"Error: {str(e)}"
+
+    def connect_to_new_database(self, connection_details: dict) -> str:
+        """Connect to a new database with provided credentials."""
+        try:
+            # Close existing connection if any
+            if self.db_connection and self.db_connection.is_connected():
+                self.db_connection.close()
+            
+            # Update connection config
+            self.db_config.update(connection_details)
+            
+            # Test new connection
+            self.db_connection = mysql.connector.connect(**self.db_config)
+            
+            if self.db_connection.is_connected():
+                cursor = self.db_connection.cursor()
+                cursor.execute("SELECT DATABASE()")
+                db_name = cursor.fetchone()[0]
+                cursor.close()
+                return f"Successfully connected to MySQL database{' ' + db_name if db_name else ''}"
+            else:
+                return "Failed to connect to database"
+            
+        except Error as e:
+            return f"Database connection error: {str(e)}"
