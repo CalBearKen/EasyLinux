@@ -1,0 +1,22 @@
+version: '3'
+services:
+  ai-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./docker:/app
+      - ./agent.py:/app/agent.py
+      - ./.env:/app/.env
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+
+  webapp:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./webapp:/usr/share/nginx/html
