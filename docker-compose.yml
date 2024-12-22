@@ -7,12 +7,14 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./docker:/app
+      - ./docker:/app/docker
       - ./agent.py:/app/agent.py
       - ./.env:/app/.env
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=development
+    command: >
+      bash -c "chmod -R 755 /app/test && python -m flask run --host=0.0.0.0"
 
   webapp:
     image: nginx:alpine

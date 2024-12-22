@@ -1,5 +1,3 @@
-import { config } from './config.js';
-
 document.addEventListener('DOMContentLoaded', function() {
     const terminal = document.getElementById('output');
     const input = document.getElementById('command-input');
@@ -25,7 +23,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function validateApiKey(key) {
         try {
-            const response = await fetch(`${config.API_URL}/validate`, {
+            const response = await fetch('http://localhost:5000/validate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -34,6 +32,12 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             
             const data = await response.json();
+            
+            if (!response.ok) {
+                console.error('Validation error:', data.error);
+                return false;
+            }
+            
             return data.valid;
         } catch (error) {
             console.error('Error:', error);
@@ -49,19 +53,33 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
+        if (!key.startsWith('sk-')) {
+            loginError.textContent = 'Invalid API key format. Should start with "sk-"';
+            loginError.style.display = 'block';
+            return;
+        }
+
         loginButton.disabled = true;
         loginButton.textContent = 'Validating...';
+        loginError.style.display = 'none';
 
-        const isValid = await validateApiKey(key);
-        
-        if (isValid) {
-            apiKey = key;
-            loginOverlay.style.display = 'none';
-            container.style.display = 'block';
-            appendMessage('AI Shell initialized. Type your message or command...');
-        } else {
-            loginError.textContent = 'Invalid API key';
+        try {
+            const isValid = await validateApiKey(key);
+            
+            if (isValid) {
+                apiKey = key;
+                loginOverlay.style.display = 'none';
+                container.style.display = 'block';
+                appendMessage('AI Shell initialized. Type your message or command...');
+            } else {
+                loginError.textContent = 'Invalid API key. Please check your API key and try again.';
+                loginError.style.display = 'block';
+            }
+        } catch (error) {
+            loginError.textContent = 'Error validating API key. Please try again.';
             loginError.style.display = 'block';
+            console.error('Login error:', error);
+        } finally {
             loginButton.disabled = false;
             loginButton.textContent = 'Connect';
         }
@@ -69,7 +87,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function sendMessage(message) {
         try {
-            const response = await fetch(`${config.API_URL}/chat`, {
+            const response = await fetch('http://localhost:5000/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

@@ -1,0 +1,13 @@
+2024-12-22 09:38:27,460 INFO: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.18.0.2:5000
+2024-12-22 09:38:27,461 INFO: [33mPress CTRL+C to quit[0m
+2024-12-22 09:39:10,058 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:10] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:39:18,293 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:18] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:39:21,117 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:21] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:39:21,958 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:21] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:39:22,797 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:22] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:39:25,802 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:25] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:39:28,141 INFO: 172.18.0.1 - - [22/Dec/2024 09:39:28] "OPTIONS /validate HTTP/1.1" 200 -
+2024-12-22 09:41:05,564 INFO: 172.18.0.1 - - [22/Dec/2024 09:41:05] "OPTIONS /validate HTTP/1.1" 200 -
