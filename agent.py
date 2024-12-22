@@ -81,9 +81,55 @@ class AIAgent:
                 'allowed_flags': {'-h', '-s', '-a'},
                 'max_args': 2,
                 'description': 'Estimate file space usage'
+            },
+            'python': {
+                'allowed_flags': {'-u', '-m', '-c'},
+                'max_args': 2,
+                'description': 'Execute Python scripts'
+            },
+            'python3': {
+                'allowed_flags': {'-u', '-m', '-c'},
+                'max_args': 2,
+                'description': 'Execute Python scripts'
+            },
+            'pip': {
+                'allowed_flags': {'install', 'uninstall', 'list', 'freeze', '--version', '-r', '--user'},
+                'max_args': 4,
+                'description': 'Python package manager'
+            },
+            'pip3': {
+                'allowed_flags': {'install', 'uninstall', 'list', 'freeze', '--version', '-r', '--user'},
+                'max_args': 4,
+                'description': 'Python package manager'
             }
         }
         
+        # Define allowed pip packages for security
+        self.allowed_packages = {
+            'requests',
+            'pandas',
+            'numpy',
+            'matplotlib',
+            'scikit-learn',
+            'tensorflow',
+            'torch',
+            'flask',
+            'django',
+            'pytest',
+            'beautifulsoup4',
+            'pillow',
+            'opencv-python',
+            'sqlalchemy',
+            'psycopg2-binary',
+            'pymongo',
+            'redis',
+            'celery',
+            'fastapi',
+            'uvicorn',
+            'aiohttp',
+            'jupyter'
+        }
+
     def initialize_test_environment(self):
         """Create test files and directories if they don't exist."""
         try:
@@ -155,10 +201,28 @@ class AIAgent:
                 
         return True, ""
 
+    def validate_pip_command(self, args: List[str]) -> Tuple[bool, str]:
+        """Special validation for pip commands."""
+        if not args:
+            return False, "No pip command specified"
+            
+        command = args[0]
+        if command == 'install':
+            # Check if package is in allowed list
+            packages = [arg for arg in args[1:] if not arg.startswith('-')]
+            for package in packages:
+                # Remove version specifiers for checking
+                base_package = package.split('==')[0].split('>=')[0].split('<=')[0]
+                if base_package not in self.allowed_packages:
+                    return False, f"Package '{base_package}' is not in the allowed list"
+        elif command not in {'list', 'freeze', '--version'}:
+            return False, f"Pip command '{command}' is not allowed"
+            
+        return True, ""
+
     def execute_command(self, command_str: str) -> Tuple[str, bool]:
         """Execute a command safely and return its output."""
         try:
-            # Split command and arguments
             args = shlex.split(command_str)
             if not args:
                 return "Empty command", False
@@ -166,28 +230,26 @@ class AIAgent:
             command = args[0]
             command_args = args[1:]
             
-            # Add debug print
-            print(f"Executing command: {command} with args: {command_args}")
+            # Special handling for pip commands
+            if command in {'pip', 'pip3'}:
+                is_valid, error_msg = self.validate_pip_command(command_args)
+                if not is_valid:
+                    return error_msg, False
+            else:
+                # Regular command validation
+                is_valid, error_msg = self.validate_command(command, command_args)
+                if not is_valid:
+                    return error_msg, False
             
-            # Validate command and arguments
-            is_valid, error_msg = self.validate_command(command, command_args)
-            if not is_valid:
-                print(f"Command validation failed: {error_msg}")
-                return error_msg, False
-            
-            # Execute command with timeout and resource limits
+            # Execute command
             result = subprocess.run(
                 args,
                 capture_output=True,
                 text=True,
-                timeout=10,  # 10 second timeout
+                timeout=300,  # Longer timeout for pip install
                 cwd=self.working_directory,
-                env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},  # Minimal PATH
+                env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
             )
-            
-            # Add debug print
-            print(f"Command output: {result.stdout}")
-            print(f"Command error: {result.stderr}")
             
             if result.returncode == 0:
                 return result.stdout.strip(), True
@@ -195,9 +257,8 @@ class AIAgent:
                 return f"Command failed: {result.stderr.strip()}", False
                 
         except subprocess.TimeoutExpired:
-            return "Command timed out after 10 seconds", False
+            return "Command timed out", False
         except Exception as e:
-            print(f"Command execution error: {str(e)}")
             return f"Error executing command: {str(e)}", False
 
     def get_response(self, user_input: str) -> str:
@@ -207,36 +268,36 @@ class AIAgent:
         system_prompt = """You are an AI assistant that helps users with Linux commands using natural language.
         When users ask questions in natural language, translate them to appropriate Linux commands.
         
-        ALWAYS respond in this format:
-        1. Brief explanation of what you'll do
-        2. The exact command line: "EXECUTE: <command>"
-        
         Available commands and capabilities:
         1. File Operations:
-           - List files and directories: ls -l, ls -la, ls -lh
-           - Show file contents: cat <filename>
-           - Show file sizes: ls -lh
-           - Sort files by size: ls -lS
+           - View file contents: cat <filename>
+           - List files: ls -l, ls -la, ls -lh
+           - Create files: echo "content" > filename
+           - Append to files: echo "content" >> filename
         
-        2. Search Operations:
-           - Find files by name: find . -name "pattern"
-           - Search file contents: grep "pattern" files
-           - Find and filter files: find + grep
+        2. Python Operations:
+           - Run Python files: python <filename>
+           - Execute Python code: python -c "code"
+           - Install packages: pip install <package>
+           - List installed packages: pip list
+           - Show package versions: pip freeze
+        
+        Common translations:
+        - "install package numpy" → "pip install numpy"
+        - "add package pandas" → "pip install pandas"
+        - "show installed packages" → "pip list"
+        - "what packages are installed" → "pip freeze"
         
         Example responses:
-        User: "Show me the largest files"
-        Response: I'll list all files sorted by size in descending order.
-        EXECUTE: ls -lS
+        User: "install numpy package"
+        Response: Installing numpy package using pip
+        EXECUTE: pip install numpy
         
-        User: "Find Python files"
-        Response: I'll search for all files with .py extension.
-        EXECUTE: find . -name "*.py"
+        User: "show all installed python packages"
+        Response: Listing all installed Python packages
+        EXECUTE: pip list
         
-        User: "Search for errors"
-        Response: I'll search for the word 'error' in all files.
-        EXECUTE: grep -r "error" .
-        
-        Always include the EXECUTE: prefix before the command."""
+        Keep explanations brief and ensure EXECUTE: is the last line."""
         
         try:
             response = self.client.chat.completions.create(
@@ -260,7 +321,8 @@ class AIAgent:
                 print(f"Executing command: {command}")  # Debug print
                 result, success = self.execute_command(command)
                 
-                response_text = f"{explanation}\nCommand: {command}\nOutput: {result}"
+                # Format response without repeating the explanation
+                response_text = f"Command: {command}\nOutput: {result}"
                 self.add_to_history("assistant", response_text)
                 return response_text
             
