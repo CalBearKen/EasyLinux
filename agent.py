@@ -5,6 +5,9 @@ import shlex
 import os
 import re
 from pathlib import Path
+import mysql.connector
+from mysql.connector import Error
+import pandas as pd
 
 class AIAgent:
     def __init__(self, api_key: str):
@@ -101,6 +104,16 @@ class AIAgent:
                 'allowed_flags': {'install', 'uninstall', 'list', 'freeze', '--version', '-r', '--user'},
                 'max_args': 4,
                 'description': 'Python package manager'
+            },
+            'mysql': {
+                'allowed_flags': {'-e', '--execute', '-D', '--database'},
+                'max_args': 5,
+                'description': 'Execute MySQL commands'
+            },
+            'query': {
+                'allowed_flags': set(),  # Custom command for SQL queries
+                'max_args': 1,
+                'description': 'Execute SQL queries'
             }
         }
         
@@ -129,6 +142,15 @@ class AIAgent:
             'aiohttp',
             'jupyter'
         }
+        
+        # Add MySQL connection
+        self.db_config = {
+            'host': os.getenv('MYSQL_HOST', 'mysql'),
+            'user': os.getenv('MYSQL_USER', 'root'),
+            'password': os.getenv('MYSQL_PASSWORD', 'rootpassword'),
+            'database': os.getenv('MYSQL_DATABASE', 'testdb')
+        }
+        self.db_connection = None
 
     def initialize_test_environment(self):
         """Create test files and directories if they don't exist."""
@@ -220,9 +242,67 @@ class AIAgent:
             
         return True, ""
 
+    def connect_to_db(self) -> bool:
+        """Establish database connection."""
+        try:
+            if not self.db_connection or not self.db_connection.is_connected():
+                self.db_connection = mysql.connector.connect(**self.db_config)
+            return True
+        except Error as e:
+            print(f"Error connecting to MySQL: {e}")
+            return False
+
+    def execute_query(self, query: str) -> Tuple[str, bool]:
+        """Execute SQL query and return results."""
+        try:
+            if not self.connect_to_db():
+                return "Failed to connect to database", False
+
+            cursor = self.db_connection.cursor(dictionary=True)
+            cursor.execute(query)
+            
+            # Handle SHOW TABLES and DESCRIBE commands
+            if query.strip().upper().startswith(('SHOW', 'DESCRIBE')):
+                results = cursor.fetchall()
+                if not results:
+                    return "No tables found", True
+                
+                # Format results for SHOW TABLES
+                if query.strip().upper().startswith('SHOW'):
+                    tables = [list(row.values())[0] for row in results]
+                    return "Tables in database:\n- " + "\n- ".join(tables), True
+                
+                # Format results for DESCRIBE
+                df = pd.DataFrame(results)
+                return df.to_string(), True
+                
+            elif query.strip().upper().startswith('SELECT'):
+                # For SELECT queries, fetch and format results
+                results = cursor.fetchall()
+                if not results:
+                    return "Query returned no results", True
+                
+                # Convert to pandas DataFrame for nice formatting
+                df = pd.DataFrame(results)
+                return df.to_string(), True
+            else:
+                # For INSERT, UPDATE, DELETE queries
+                self.db_connection.commit()
+                return f"Query executed successfully. Affected rows: {cursor.rowcount}", True
+                
+        except Error as e:
+            return f"Database error: {str(e)}", False
+        finally:
+            if 'cursor' in locals():
+                cursor.close()
+
     def execute_command(self, command_str: str) -> Tuple[str, bool]:
         """Execute a command safely and return its output."""
         try:
+            # Special handling for SQL queries
+            if command_str.strip().upper().startswith(('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'SHOW', 'DESCRIBE', 'CREATE')):
+                return self.execute_query(command_str)
+
             args = shlex.split(command_str)
             if not args:
                 return "Empty command", False
@@ -265,38 +345,24 @@ class AIAgent:
         """Get a response from the AI agent."""
         self.add_to_history("user", user_input)
         
-        system_prompt = """You are an AI assistant that helps users with Linux commands using natural language.
-        When users ask questions in natural language, translate them to appropriate Linux commands.
+        system_prompt = """You are an AI assistant that helps users with Linux commands and database queries using natural language.
+        When users ask questions in natural language, ALWAYS translate them to proper SQL commands.
         
-        Available commands and capabilities:
-        1. File Operations:
-           - View file contents: cat <filename>
-           - List files: ls -l, ls -la, ls -lh
-           - Create files: echo "content" > filename
-           - Append to files: echo "content" >> filename
-        
-        2. Python Operations:
-           - Run Python files: python <filename>
-           - Execute Python code: python -c "code"
-           - Install packages: pip install <package>
-           - List installed packages: pip list
-           - Show package versions: pip freeze
-        
-        Common translations:
-        - "install package numpy" → "pip install numpy"
-        - "add package pandas" → "pip install pandas"
-        - "show installed packages" → "pip list"
-        - "what packages are installed" → "pip freeze"
+        For SELECT queries:
+        - Use proper SQL SELECT syntax
+        - For "what data" questions, use "SELECT * FROM table_name"
+        - Always end SQL statements with a semicolon
         
         Example responses:
-        User: "install numpy package"
-        Response: Installing numpy package using pip
-        EXECUTE: pip install numpy
+        User: "what data is in the users table"
+        Response: Retrieving all data from users table
+        EXECUTE: SELECT * FROM users;
         
-        User: "show all installed python packages"
-        Response: Listing all installed Python packages
-        EXECUTE: pip list
+        User: "show me the test table"
+        Response: Retrieving all records from test table
+        EXECUTE: SELECT * FROM test;
         
+        IMPORTANT: Always respond with proper SQL syntax.
         Keep explanations brief and ensure EXECUTE: is the last line."""
         
         try:

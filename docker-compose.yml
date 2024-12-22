@@ -13,8 +13,25 @@ services:
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=development
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpassword
+      - MYSQL_DATABASE=testdb
     command: >
       bash -c "chmod -R 755 /app/test && python -m flask run --host=0.0.0.0"
+    depends_on:
+      - mysql
+
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=testdb
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
   webapp:
     image: nginx:alpine
@@ -22,3 +39,6 @@ services:
       - "8080:80"
     volumes:
       - ./webapp:/usr/share/nginx/html
+
+volumes:
+  mysql_data:

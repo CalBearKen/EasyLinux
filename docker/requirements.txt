@@ -1,4 +1,7 @@
 flask
 openai>=1.0.0
 python-dotenv
-flask-cors 
+flask-cors
+mysql-connector-python
+sqlalchemy
+pandas 
