@@ -10,6 +10,7 @@ services:
       - ./docker:/app/docker
       - ./agent.py:/app/agent.py
       - ./.env:/app/.env
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=development

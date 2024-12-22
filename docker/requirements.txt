@@ -4,4 +4,5 @@ python-dotenv
 flask-cors
 mysql-connector-python
 sqlalchemy
-pandas 
+pandas
+docker>=6.1.0 
