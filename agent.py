@@ -36,6 +36,11 @@ class AIAgent:
         
         # Define allowed commands with their permitted arguments/flags
         self.command_rules = {
+            'cd': {
+                'allowed_flags': set(),  # cd doesn't typically use flags
+                'max_args': 1,
+                'description': 'Change directory'
+            },
             'ls': {
                 'allowed_flags': {'-l', '-a', '-h', '-r', '--sort', '-S', '-lh', '-lS', '-la', '-lha'},
                 'max_args': 2,
@@ -339,18 +344,59 @@ class AIAgent:
     def execute_loop(self, loop_type: str, operation: str) -> Tuple[str, bool]:
         """Execute a generalized loop operation."""
         try:
-            if loop_type == "TABLE":
+            result = []  # Initialize result list at the start
+            
+            if loop_type == "FILE":
+                # Get all files in the current directory
+                files = [f for f in os.listdir(os.getcwd()) if os.path.isfile(os.path.join(os.getcwd(), f))]
+                
+                if not files:
+                    return "No files found in current directory", False
+                    
+                for file in files:
+                    file_path = os.path.join(os.getcwd(), file)
+                    if operation == "SHOW":
+                        result.append(f"\n=== File: {file} ===")
+                        try:
+                            with open(file_path, 'r') as f:
+                                content = f.read()
+                                result.append(content)
+                        except Exception as e:
+                            result.append(f"(Error reading file: {str(e)})")
+                    elif operation == "COUNT":
+                        try:
+                            with open(file_path, 'r') as f:
+                                lines = len(f.readlines())
+                                result.append(f"File {file}: {lines} lines")
+                        except Exception as e:
+                            result.append(f"Error counting lines in {file}: {str(e)}")
+                    elif operation == "SIZE":
+                        try:
+                            size = os.path.getsize(file_path)
+                            # Convert size to human-readable format
+                            if size < 1024:
+                                size_str = f"{size} B"
+                            elif size < 1024 * 1024:
+                                size_str = f"{size/1024:.1f} KB"
+                            else:
+                                size_str = f"{size/(1024*1024):.1f} MB"
+                            result.append(f"File {file}: {size_str}")
+                        except Exception as e:
+                            result.append(f"Error getting size of {file}: {str(e)}")
+                
+                return "\n".join(result), True
+                
+            elif loop_type == "TABLE":
                 if not self.connect_to_db():
                     return "Failed to connect to database", False
-
+                    
                 cursor = self.db_connection.cursor(dictionary=True)
                 cursor.execute("SHOW TABLES")
                 tables = [list(row.values())[0] for row in cursor.fetchall()]
                 
                 if not tables:
                     return "No tables found in database", False
-
-                result = []
+                    
                 # Parse LIMIT from operation if present
                 limit = None
                 if "LIMIT" in operation:
@@ -360,7 +406,7 @@ class AIAgent:
                         limit = int(parts[1].strip())
                     except ValueError:
                         return "Invalid LIMIT value", False
-
+                        
                 for table in tables:
                     if operation == "SHOW":
                         result.append(f"\n=== Table: {table} ===")
@@ -384,35 +430,11 @@ class AIAgent:
                         df = pd.DataFrame(structure)
                         result.append(f"\n=== Structure of {table} ===")
                         result.append(df.to_string())
-
+                        
                 return "\n".join(result), True
-
-            elif loop_type == "FILE":
-                result = []
-                for file in os.listdir(self.working_directory):
-                    file_path = os.path.join(self.working_directory, file)
-                    if os.path.isfile(file_path):
-                        if operation == "SHOW":
-                            result.append(f"\n=== File: {file} ===")
-                            try:
-                                with open(file_path, 'r') as f:
-                                    content = f.read()
-                                    result.append(content)
-                            except Exception as e:
-                                result.append(f"(Error reading file: {str(e)})")
-                        elif operation == "COUNT":
-                            try:
-                                with open(file_path, 'r') as f:
-                                    lines = len(f.readlines())
-                                    result.append(f"File {file}: {lines} lines")
-                            except Exception as e:
-                                result.append(f"Error counting lines in {file}: {str(e)}")
-                        elif operation == "SIZE":
-                            size = os.path.getsize(file_path)
-                            result.append(f"File {file}: {size} bytes")
-
-            return "\n".join(result), True
-
+                
+            return "Invalid loop type", False
+            
         except Exception as e:
             return f"Error executing loop: {str(e)}", False
 
@@ -425,6 +447,31 @@ class AIAgent:
             if command_str.strip().upper().startswith(('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'SHOW', 'DESCRIBE', 'CREATE', 'USE')):
                 result, success = self.execute_query(command_str)
                 return f"{prompt}\n{result}", success
+
+            args = shlex.split(command_str)
+            if not args:
+                return f"{prompt}\nEmpty command", False
+            
+            command = args[0]
+            command_args = args[1:]
+
+            # Special handling for cd command
+            if command == 'cd':
+                if len(command_args) == 0:
+                    # cd without args goes to working_directory
+                    os.chdir(self.working_directory)
+                    return f"{prompt}\nChanged to {self.working_directory}", True
+                elif len(command_args) == 1:
+                    new_path = os.path.abspath(os.path.join(os.getcwd(), command_args[0]))
+                    if not new_path.startswith(self.working_directory):
+                        return f"{prompt}\nAccess denied: Cannot navigate outside of {self.working_directory}", False
+                    os.chdir(new_path)
+                    return f"{prompt}\nChanged to {new_path}", True
+                else:
+                    return f"{prompt}\nToo many arguments for cd command", False
+
+            # Rest of the command handling...
+            # ... existing code ...
 
             # Special handling for python -c commands
             if command_str.strip().startswith(('python -c', 'python3 -c')):
@@ -591,9 +638,14 @@ class AIAgent:
            - "what databases are there" → EXECUTE: SHOW DATABASES;
         
         2. Loop Command:
-           LOOP: TYPE:OPERATION [LIMIT n]
+           LOOP: TYPE:OPERATION
            Types: FILE, TABLE
            Operations: SHOW, COUNT, SIZE
+           Examples:
+           - "for files in this folder, print their sizes" → LOOP: FILE:SIZE
+           - "for each file, show content" → LOOP: FILE:SHOW
+           - "for each table, show rows" → LOOP: TABLE:SHOW
+           - "count lines in all files" → LOOP: FILE:COUNT
         
         3. Database Connection:
            Connect: CONNECT: {connection_json}
@@ -623,7 +675,7 @@ class AIAgent:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini", #gpt-3.5-turbo
                 messages=[
                     {"role": "system", "content": system_prompt},
                     *self.conversation_history[-4:],

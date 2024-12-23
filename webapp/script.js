@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const loginButton = document.getElementById('login-button');
     const loginError = document.getElementById('login-error');
     
-    let apiKey = null;
+    let sessionId = null;
 
     function appendMessage(message, isUser = false) {
         const messageDiv = document.createElement('div');
@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ api_key: key }),
+                credentials: 'include'  // Include cookies for session
             });
             
             const data = await response.json();
@@ -38,6 +39,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 return false;
             }
             
+            sessionId = data.session_id;
             return data.valid;
         } catch (error) {
             console.error('Error:', error);
@@ -67,7 +69,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const isValid = await validateApiKey(key);
             
             if (isValid) {
-                apiKey = key;
                 loginOverlay.style.display = 'none';
                 container.style.display = 'block';
                 appendMessage('AI Shell initialized. Type your message or command...');
@@ -90,11 +91,20 @@ document.addEventListener('DOMContentLoaded', function() {
             const response = await fetch('http://localhost:5000/chat', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': apiKey
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ message: message }),
+                credentials: 'include'  // Include cookies for session
             });
+
+            if (response.status === 401) {
+                // Session expired, show login
+                loginOverlay.style.display = 'flex';
+                container.style.display = 'none';
+                loginError.textContent = 'Session expired. Please login again.';
+                loginError.style.display = 'block';
+                return;
+            }
 
             const data = await response.json();
             appendMessage(data.response);
@@ -103,6 +113,28 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Error:', error);
         }
     }
+
+    async function handleLogout() {
+        try {
+            await fetch('http://localhost:5000/logout', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            loginOverlay.style.display = 'flex';
+            container.style.display = 'none';
+            terminal.innerHTML = '';  // Clear terminal
+            sessionId = null;
+        } catch (error) {
+            console.error('Logout error:', error);
+        }
+    }
+
+    // Add logout button
+    const logoutButton = document.createElement('button');
+    logoutButton.textContent = 'Logout';
+    logoutButton.className = 'logout-button';
+    logoutButton.onclick = handleLogout;
+    container.appendChild(logoutButton);
 
     loginButton.addEventListener('click', handleLogin);
     apiKeyInput.addEventListener('keypress', function(e) {
@@ -120,5 +152,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 input.value = '';
             }
         }
+    });
+
+    // Check session on load
+    fetch('http://localhost:5000/chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ message: '' }),
+        credentials: 'include'
+    }).then(response => {
+        if (response.status === 401) {
+            loginOverlay.style.display = 'flex';
+            container.style.display = 'none';
+        } else {
+            loginOverlay.style.display = 'none';
+            container.style.display = 'block';
+        }
+    }).catch(error => {
+        console.error('Session check error:', error);
+        loginOverlay.style.display = 'flex';
+        container.style.display = 'none';
     });
 }); 
