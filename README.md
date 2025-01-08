@@ -24,6 +24,12 @@ After entering your API key, you can:
 - Execute allowed commands (ls, pwd, echo, cat, grep, date, whoami, df, ps)
 - Get AI-powered responses
 
+## Setup
+1. .env/Scripts/activate
+2. docker-compose up --build
+3. Go to localhost:8080
+4. Input API key
+
 ## Troubleshooting
 
 1. **Port Conflicts**: If ports 5000/8080 are in use, modify them in docker-compose.yml
