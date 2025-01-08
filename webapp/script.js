@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const loginError = document.getElementById('login-error');
     
     let sessionId = null;
+    let currentApiKey = null;
 
     function appendMessage(message, isUser = false) {
         const messageDiv = document.createElement('div');
@@ -29,7 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ api_key: key }),
-                credentials: 'include'  // Include cookies for session
+                credentials: 'include'
             });
             
             const data = await response.json();
@@ -40,9 +41,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             sessionId = data.session_id;
+            currentApiKey = key;
             return data.valid;
         } catch (error) {
             console.error('Error:', error);
+            if (error instanceof TypeError && error.message.includes('CORS')) {
+                loginError.textContent = 'CORS error: Unable to connect to server. Please ensure the server is running and properly configured.';
+            }
             return false;
         }
     }
@@ -91,26 +96,31 @@ document.addEventListener('DOMContentLoaded', function() {
             const response = await fetch('http://localhost:5000/chat', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'X-API-Key': currentApiKey
                 },
                 body: JSON.stringify({ message: message }),
-                credentials: 'include'  // Include cookies for session
+                credentials: 'include'
             });
 
             if (response.status === 401) {
-                // Session expired, show login
                 loginOverlay.style.display = 'flex';
                 container.style.display = 'none';
                 loginError.textContent = 'Session expired. Please login again.';
                 loginError.style.display = 'block';
+                currentApiKey = null;
                 return;
             }
 
             const data = await response.json();
             appendMessage(data.response);
         } catch (error) {
-            appendMessage('Error: Failed to communicate with the server');
             console.error('Error:', error);
+            if (error instanceof TypeError && error.message.includes('CORS')) {
+                appendMessage('Error: CORS policy prevented connection to server. Please check server configuration.');
+            } else {
+                appendMessage('Error: Failed to communicate with the server');
+            }
         }
     }
 

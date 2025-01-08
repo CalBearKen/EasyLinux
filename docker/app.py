@@ -7,7 +7,7 @@ from openai import OpenAI
 import logging
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True, origins=["http://localhost:8080"])
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

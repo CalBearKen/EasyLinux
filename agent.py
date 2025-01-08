@@ -41,6 +41,11 @@ class AIAgent:
                 'max_args': 1,
                 'description': 'Change directory'
             },
+            'pwd': {
+                'allowed_flags': set(),  # pwd doesn't typically use flags
+                'max_args': 0,
+                'description': 'Print working directory'
+            },
             'ls': {
                 'allowed_flags': {'-l', '-a', '-h', '-r', '--sort', '-S', '-lh', '-lS', '-la', '-lha'},
                 'max_args': 2,
@@ -348,41 +353,43 @@ class AIAgent:
             
             if loop_type == "FILE":
                 # Get all files in the current directory
-                files = [f for f in os.listdir(os.getcwd()) if os.path.isfile(os.path.join(os.getcwd(), f))]
+                files = [f for f in os.listdir(self.working_directory) if os.path.isfile(os.path.join(self.working_directory, f))]
                 
                 if not files:
                     return "No files found in current directory", False
-                    
+                
+                # Split the operation into command and arguments
+                cmd_parts = shlex.split(operation)
+                command = cmd_parts[0]
+                command_args = cmd_parts[1:] if len(cmd_parts) > 1 else []
+                
+                # Validate command
+                if command not in self.command_rules:
+                    return f"Command '{command}' is not allowed", False
+                
+                # Process each file
                 for file in files:
-                    file_path = os.path.join(os.getcwd(), file)
-                    if operation == "SHOW":
-                        result.append(f"\n=== File: {file} ===")
-                        try:
-                            with open(file_path, 'r') as f:
-                                content = f.read()
-                                result.append(content)
-                        except Exception as e:
-                            result.append(f"(Error reading file: {str(e)})")
-                    elif operation == "COUNT":
-                        try:
-                            with open(file_path, 'r') as f:
-                                lines = len(f.readlines())
-                                result.append(f"File {file}: {lines} lines")
-                        except Exception as e:
-                            result.append(f"Error counting lines in {file}: {str(e)}")
-                    elif operation == "SIZE":
-                        try:
-                            size = os.path.getsize(file_path)
-                            # Convert size to human-readable format
-                            if size < 1024:
-                                size_str = f"{size} B"
-                            elif size < 1024 * 1024:
-                                size_str = f"{size/1024:.1f} KB"
-                            else:
-                                size_str = f"{size/(1024*1024):.1f} MB"
-                            result.append(f"File {file}: {size_str}")
-                        except Exception as e:
-                            result.append(f"Error getting size of {file}: {str(e)}")
+                    file_path = os.path.join(self.working_directory, file)
+                    result.append(f"\n=== {file} ===")
+                    
+                    try:
+                        # Execute command for this file
+                        cmd_result = subprocess.run(
+                            [command, *command_args, file_path],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            cwd=self.working_directory,
+                            env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+                        )
+                        
+                        if cmd_result.returncode == 0:
+                            output = cmd_result.stdout.strip()
+                            result.append(output if output else "(no output)")
+                        else:
+                            result.append(f"Error: {cmd_result.stderr.strip()}")
+                    except Exception as e:
+                        result.append(f"Error processing {file}: {str(e)}")
                 
                 return "\n".join(result), True
                 
@@ -612,72 +619,84 @@ class AIAgent:
             return f"{prompt}\nError: {str(e)}", False
 
     def get_response(self, user_input: str) -> str:
-        """Get a response from the AI agent."""
+        """Get a response from the AI agent using a two-step process."""
         self.add_to_history("user", user_input)
         
-        system_prompt = """You are a command translator that converts natural language into executable commands.
-        You have access to conversation history to understand context, but ALWAYS generate new, complete commands.
+        # Step 1: Safety Check
+        safety_prompt = """You are a security validator for shell commands. Your job is to determine if a natural language command could be harmful.
         
-        CURRENT ENVIRONMENT:
-        - Database Functions:
-          * Current Database: EXECUTE: SELECT DATABASE();
-          * List Tables: EXECUTE: SHOW TABLES;
-          * List Databases: EXECUTE: SHOW DATABASES;
-          * Table Structure: EXECUTE: DESCRIBE table_name;
-          * Limit Rows: EXECUTE: SELECT * FROM table LIMIT n;
+        Safe commands include:
+        - File reading/listing (ls, cat, head, tail, less, pwd)
+        - File searching/counting (find, grep, wc)
+        - System information (pwd, ps, df, du)
+        - Basic text processing (sort, uniq, echo)
+        - Development tools (python, pip with allowed packages)
         
-        COMMAND FORMAT:
-        1. Single Command:
-           EXECUTE: <command>
-           Examples:
-           - "run test.py" → EXECUTE: python test.py
-           - "show users" → EXECUTE: SELECT * FROM users;
-           - "list files" → EXECUTE: ls -la
-           - "what database" → EXECUTE: SELECT DATABASE();
-           - "what tables are there" → EXECUTE: SHOW TABLES;
-           - "what databases are there" → EXECUTE: SHOW DATABASES;
+        Consider a command UNSAFE only if it could:
+        1. Modify or delete files/directories (rm, mv, chmod, chown)
+        2. Access sensitive system files (/etc/passwd, /etc/shadow)
+        3. Change system settings or configuration
+        4. Execute arbitrary downloaded code
+        5. Access network services or open ports
+        6. Attempt privilege escalation
         
-        2. Loop Command:
-           LOOP: TYPE:OPERATION
-           Types: FILE, TABLE
-           Operations: SHOW, COUNT, SIZE
-           Examples:
-           - "for files in this folder, print their sizes" → LOOP: FILE:SIZE
-           - "for each file, show content" → LOOP: FILE:SHOW
-           - "for each table, show rows" → LOOP: TABLE:SHOW
-           - "count lines in all files" → LOOP: FILE:COUNT
+        Output ONLY 'SAFE' or 'UNSAFE: <specific reason>'.
+        When in doubt about a command's safety, consider it SAFE and let the command validator handle specific restrictions.
+        """
         
-        3. Database Connection:
-           Connect: CONNECT: {connection_json}
-           Disconnect: DISCONNECT:
-        
-        Connection Examples:
-        - MySQL:
-          "connect to mysql database" → 
-          CONNECT: {"type": "mysql", "host": "mysql", "user": "root", "password": "rootpassword"}
-        - PostgreSQL:
-          "connect to postgres database" →
-          CONNECT: {"type": "postgresql", "host": "postgres", "user": "postgres", "password": "postgrespass"}
-        - Remote:
-          "connect to remote mysql at 172.17.0.2" →
-          CONNECT: {"type": "mysql", "host": "172.17.0.2", "user": "root", "password": "rootpassword"}
-        
-        Rules:
-        - Output ONLY the command, no explanations
-        - Include necessary flags and arguments
-        - Use appropriate syntax for the specified database type
-        - For loops with limits, use LIMIT keyword
-        - Use conversation history ONLY to understand context
-        - ALWAYS generate complete, new commands
-        - NEVER just repeat a previous command
-        - For database connections, ALWAYS output valid JSON with 'type' field
-        - ALWAYS prefix SQL commands with EXECUTE:"""
-
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini", #gpt-3.5-turbo
+            safety_check = self.client.chat.completions.create(
+                model="gpt-4",
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": safety_prompt},
+                    {"role": "user", "content": user_input}
+                ],
+                temperature=0.1,
+                max_tokens=50
+            )
+            
+            safety_result = safety_check.choices[0].message.content.strip()
+            
+            if not safety_result.startswith('SAFE'):
+                return f"Command rejected: {safety_result.replace('UNSAFE: ', '')}"
+            
+            # Step 2: Command Translation
+            translation_prompt = """You are an expert Linux command translator. Convert natural language into executable shell commands.
+            
+            Current working directory: /app/test
+            Available commands: ls, cd, grep, find, cat, head, tail, wc, sort, uniq, echo, ps, df, du, pwd, python, pip
+            
+            Rules:
+            1. For database operations, use format: EXECUTE: <sql_query>
+            2. For operations on files, choose between:
+               a) Single command (if possible): EXECUTE: <command>
+               b) Loop over files: LOOP: FILE:<command>
+            3. For database connections, use format: CONNECT: {connection_json}
+            
+            Examples:
+            - "show size of each file" → LOOP: FILE:du -h
+            - "show content of all files" → LOOP: FILE:cat
+            - "count lines in each file" → LOOP: FILE:wc -l
+            - "list files" → EXECUTE: ls
+            - "show current directory" → EXECUTE: pwd
+            - "find all python files" → EXECUTE: find . -name "*.py"
+            - "show first 5 lines of each file" → LOOP: FILE:head -n 5
+            
+            Plan your translation:
+            1. Identify if the operation needs to be applied to each file or can be done with a single command
+            2. Choose the most appropriate command
+            3. Add necessary flags and arguments
+            4. Validate paths are within working directory
+            
+            Output format:
+            PLAN: Brief explanation of what you'll do
+            COMMAND: The actual command to execute
+            """
+            
+            translation = self.client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": translation_prompt},
                     *self.conversation_history[-4:],
                     {"role": "user", "content": user_input}
                 ],
@@ -685,55 +704,35 @@ class AIAgent:
                 max_tokens=150
             )
             
-            ai_response = response.choices[0].message.content
-            self.add_to_history("assistant", ai_response)
+            translation_result = translation.choices[0].message.content.strip()
+            self.add_to_history("assistant", translation_result)
             
-            # Handle disconnect command first
-            if "DISCONNECT:" in ai_response:
-                result = self.disconnect_database()
-                return f"$ DISCONNECT:\n{result}"
-            
-            # Handle loop operations
-            if "LOOP:" in ai_response:
-                parts = ai_response.split("LOOP:")
-                loop_command = parts[1].strip()
-                try:
-                    loop_type, operation = loop_command.split(":")
+            # Extract command from translation
+            if "COMMAND:" in translation_result:
+                command = translation_result.split("COMMAND:")[1].strip()
+                
+                # Handle different command types
+                if command.startswith("EXECUTE:"):
+                    cmd = command.split("EXECUTE:")[1].strip()
+                    result, success = self.execute_command(cmd)
+                    return f"{translation_result}\n\nResult:\n{result}"
+                elif command.startswith("LOOP:"):
+                    loop_cmd = command.split("LOOP:")[1].strip()
+                    loop_type, operation = loop_cmd.split(":")
                     result, success = self.execute_loop(loop_type.strip(), operation.strip())
-                    return f"$ LOOP: {loop_type}:{operation}\n{result}"
-                except ValueError:
-                    return "Invalid loop command format. Expected TYPE:OPERATION"
+                    return f"{translation_result}\n\nResult:\n{result}"
+                elif command.startswith("CONNECT:"):
+                    conn_details = json.loads(command.split("CONNECT:")[1].strip())
+                    result = self.connect_to_new_database(conn_details)
+                    return f"{translation_result}\n\nResult:\n{result}"
+                else:
+                    result, success = self.execute_command(command)
+                    return f"{translation_result}\n\nResult:\n{result}"
             
-            # Handle database connection requests
-            if "CONNECT:" in ai_response:
-                parts = ai_response.split("CONNECT:")
-                connection_str = parts[1].strip()
-                try:
-                    print("\rParsing connection details...")
-                    connection_details = json.loads(connection_str)
-                    print(f"\rAttempting to connect with: host={connection_details.get('host')}, user={connection_details.get('user')}")
-                    result = self.connect_to_new_database(connection_details)
-                    if not result:
-                        return f"$ CONNECT: {connection_str}\nConnection attempt failed with no error message"
-                    return f"$ CONNECT: {connection_str}\n{result}"
-                except json.JSONDecodeError as e:
-                    return f"Invalid connection details format\nError: {str(e)}\nReceived: {connection_str}"
-                except Exception as e:
-                    return f"Connection attempt failed\nError: {str(e)}\nDetails: {connection_str}"
-            
-            # Handle regular commands
-            if "EXECUTE:" in ai_response:
-                parts = ai_response.split("EXECUTE:")
-                command = parts[1].strip()
-                result, success = self.execute_command(command)
-                return result
-            
-            return ai_response
+            return "Error: Could not extract command from translation"
             
         except Exception as e:
-            error_msg = f"Error in get_response: {str(e)}\n"
-            error_msg += f"AI Response: {ai_response}\n"
-            error_msg += f"User Input: {user_input}"
+            error_msg = f"Error processing command: {str(e)}"
             print(error_msg)  # Print for debugging
             return error_msg
 
